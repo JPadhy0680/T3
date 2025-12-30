@@ -9,7 +9,7 @@ import calendar
 from typing import Optional, Set, Tuple
 
 st.set_page_config(page_title="E2B_R3 XML Triage Application", layout="wide")
-# Ensure multi-line cells render properly
+# Ensure multi-line cells render properly (Report Date, Comments, etc.)
 st.markdown("""
 <style>
 [data-testid="stDataFrame"] div[role="cell"] {white-space: pre-wrap;}
@@ -19,15 +19,12 @@ st.markdown("""
 st.title("📊🧠 E2B_R3 XML Triage Application 🛠️ 🚀")
 
 # Version header
-# v1.6.3-global-frd-lrd-td + newline + product-wise validity aggregation
-# + Per-drug non-valid reasons column when all suspects are Non-Valid:
+# v1.6.4: Per-drug Non-Valid reasons appended into Comment (no separate column)
 # - Global FRD/LRD/TD (entire XML).
 # - Report Date renders FRD/LRD/TD on new lines.
 # - Product-wise validity computed per Celix suspect (FRD/LRD/Event/Drug, Product not Launched).
-# - Case validity: if ANY Celix suspect is Valid => overall case Valid; else Non-Valid (combined granular reason).
-# - NEW: When multiple Celix suspects and ALL are Non-Valid, add "Non-Valid Reasons (Per Drug)" column
-#        listing each product with its individual non-valid reasons.
-# - Patient Detail includes "Patient record number" from id[@root="2.16.840.1.113883.3.989.2.1.3.7"]
+# - Case validity: if ANY Celix suspect is Valid => case Valid; else Non-Valid (combined reasons).
+# - Patient Detail includes "Patient record number" via id[root="2.16.840.1.113883.3.989.2.1.3.7"].
 
 # --------------------- Helpers & Maps ---------------------
 
@@ -183,7 +180,7 @@ def get_mah_name_for_drug(drug_elem, ns) -> str:
             return node.text.strip()
     return ""
 
-# NEW: Patient record number extraction (global id OID)
+# Patient record number via global id OID
 def get_patient_record_number(root, ns) -> str:
     """
     Find hl7:id with root = '2.16.840.1.113883.3.989.2.1.3.7'
@@ -625,7 +622,7 @@ with tab1:
                         if mah_name_clean:
                             parts.append(f"MAH: {mah_name_clean}")
 
-                        # PL references into the display block (optional)
+                        # PL references (optional)
                         for t in [display_name, text_clean, form_clean, lot_clean]:
                             for pl in extract_pl_numbers(t):
                                 parts.append(f"PL: {pl}")
@@ -742,7 +739,8 @@ with tab1:
             elif not has_celix_suspect and bool(suspect_ids):
                 case_block_reason = "Non-company product"
 
-            per_drug_nonvalid_display = ""  # NEW: will fill only if needed
+            # Will append to Comment only if needed
+            per_drug_nonvalid_display = ""
 
             if case_block_reason is None and has_celix_suspect:
                 frd_raw_obj = parse_date_obj(global_dates["FRD_raw"]) if global_dates["FRD_raw"] else None
@@ -797,10 +795,10 @@ with tab1:
                             else:
                                 validity_value = "Non-Valid (Drug exposure prior to Launch)"
 
-                    # NEW: if multiple suspects and all are non-valid, render per-drug reasons
+                    # NEW: if multiple suspects and all are non-valid, render per-drug reasons in Comment
                     if num_products >= 2:
                         lines = []
-                        # Map normalized product to a readable display name (Title-case base)
+                        # Map normalized product to a readable display name
                         for prod_norm, reasons in per_product_reasons.items():
                             # Find a display name from case_drug_dates_display or fallback to title-case of norm
                             display_name = None
@@ -825,9 +823,17 @@ with tab1:
             narrative_full_raw = narrative_elem.text if narrative_elem is not None else ''
             narrative_full = clean_value(narrative_full_raw)
 
-            # Comments nudge only when case still valid
-            if comments and validity_value == "Valid":
-                validity_value = "Kindly check comment and assess validity manually"
+            # Compose Comment field:
+            # - existing comments (semicolon-separated as before)
+            # - append per-drug non-valid block (multi-line) when applicable
+            base_comments = "; ".join(sorted(set(comments))) if comments else ""
+            if per_drug_nonvalid_display:
+                if base_comments:
+                    comment_display = base_comments + "\n\nPer-drug Non-Valid Reasons:\n" + per_drug_nonvalid_display
+                else:
+                    comment_display = "Per-drug Non-Valid Reasons:\n" + per_drug_nonvalid_display
+            else:
+                comment_display = base_comments
 
             # Listedness suppressed for Non-Valid
             if isinstance(validity_value, str) and validity_value.startswith("Non-Valid"):
@@ -858,9 +864,7 @@ with tab1:
                 'Event Details': event_details_combined_display,
                 'Narrative': narrative_full,
                 'Validity': validity_value,
-                # NEW column shows per-drug non-valid reasons when applicable
-                'Non-Valid Reasons (Per Drug)': per_drug_nonvalid_display,
-                'Comment': "; ".join(sorted(set(comments))) if comments else "",
+                'Comment': comment_display,  # <-- includes per-drug non-valid reasons when applicable
                 'Listedness (Event-level)': listedness_event_level_display,
                 'Reportability': reportability,
                 'App Assessment': '',
@@ -884,7 +888,6 @@ with tab2:
         preferred_order = [
             'SL No','Date','Sender ID','Report Date','Case Age (days)','Reporter Qualification',
             'Patient Detail','Product Detail','Event Details','Narrative','Validity',
-            'Non-Valid Reasons (Per Drug)',  # NEW column shown in table
             'Comment','Listedness (Event-level)','Reportability','App Assessment','Parsing Warnings'
         ]
         df_display = df_display[[c for c in preferred_order if c in df_display.columns]]
@@ -901,6 +904,7 @@ with tab2:
 st.markdown("""
 **Developed by Jagamohan** _Disclaimer: App is in developmental stage, validate before using the data._
 """, unsafe_allow_html=True)
+
 
 
 
