@@ -19,12 +19,13 @@ st.markdown("""
 st.title("📊🧠 E2B_R3 XML Triage Application 🛠️ 🚀")
 
 # Version header
-# v1.6.4: Per-drug Non-Valid reasons appended into Comment (no separate column)
+# v1.6.5: Lot presence rule + previous features
+# - If LOT number is present in any suspect product: do not validate case and add comment "Verify Lot No with Celix-Lot No List".
 # - Global FRD/LRD/TD (entire XML).
 # - Report Date renders FRD/LRD/TD on new lines.
-# - Product-wise validity computed per Celix suspect (FRD/LRD/Event/Drug, Product not Launched).
-# - Case validity: if ANY Celix suspect is Valid => case Valid; else Non-Valid (combined reasons).
-# - Patient Detail includes "Patient record number" via id[root="2.16.840.1.113883.3.989.2.1.3.7"].
+# - Product-wise validity; overall case validity aggregation (any product valid => case valid).
+# - Per-drug non-valid reasons appended into Comment (no separate column) when multiple suspects and all are Non-Valid.
+# - Patient Detail includes patient record number via id[root="2.16.840.1.113883.3.989.2.1.3.7"].
 
 # --------------------- Helpers & Maps ---------------------
 
@@ -533,6 +534,9 @@ with tab1:
             case_event_dates = []
             case_products_norm: Set[str] = set()
 
+            # NEW: Track if any LOT number is present for a suspect Celix product
+            lot_present_for_suspect = False
+
             for drug in root.findall('.//hl7:substanceAdministration', ns):
                 id_elem = drug.find('.//hl7:id', ns)
                 drug_id = id_elem.attrib.get('root', '') if id_elem is not None else ''
@@ -576,7 +580,7 @@ with tab1:
                     drug_start_obj = parse_date_obj(start_date_str)
                     drug_stop_obj = parse_date_obj(stop_date_str)
 
-                    # Form / lot / MAH display
+                    # Form / LOT / MAH display
                     form_elem = drug.find('.//hl7:formCode/hl7:originalText', ns)
                     form_clean = ""
                     if form_elem is not None and form_elem.text:
@@ -586,6 +590,12 @@ with tab1:
                     lot_clean = ""
                     if lot_elem is not None and lot_elem.text:
                         lot_clean = clean_value(lot_elem.text)
+
+                    # If any LOT number present for a suspect Celix product, set flag
+                    if matched_company_prod and lot_clean:
+                        lot_present_for_suspect = True
+                        # Ensure the required comment gets added
+                        comments.append('Verify Lot No with Celix-Lot No List')
 
                     mah_name_raw = get_mah_name_for_drug(drug, ns)
                     mah_name_clean = clean_value(mah_name_raw)
@@ -795,7 +805,7 @@ with tab1:
                             else:
                                 validity_value = "Non-Valid (Drug exposure prior to Launch)"
 
-                    # NEW: if multiple suspects and all are non-valid, render per-drug reasons in Comment
+                    # If multiple suspects and all are Non-Valid, render per-drug reasons in Comment
                     if num_products >= 2:
                         lines = []
                         # Map normalized product to a readable display name
@@ -835,6 +845,18 @@ with tab1:
             else:
                 comment_display = base_comments
 
+            # ---------- LOT presence validity override ----------
+            # If any suspect Celix product has LOT number present:
+            # - Do not validate (override whatever validity_value currently is)
+            # - Ensure comment "Verify Lot No with Celix-Lot No List" is present
+            if lot_present_for_suspect:
+                if "Verify Lot No with Celix-Lot No List" not in comment_display:
+                    comment_display = (comment_display + ("\n" if comment_display else "")) + "Verify Lot No with Celix-Lot No List"
+                validity_value = "Kindly check comment and assess validity manually"
+                # Reportability is indeterminate until manual check, keep current logic or set to NA
+                # Here we keep existing reportability unless you prefer to force NA:
+                # reportability = "NA"
+
             # Listedness suppressed for Non-Valid
             if isinstance(validity_value, str) and validity_value.startswith("Non-Valid"):
                 reportability = "NA"
@@ -864,7 +886,7 @@ with tab1:
                 'Event Details': event_details_combined_display,
                 'Narrative': narrative_full,
                 'Validity': validity_value,
-                'Comment': comment_display,  # <-- includes per-drug non-valid reasons when applicable
+                'Comment': comment_display,  # includes per-drug reasons + LOT verification note when applicable
                 'Listedness (Event-level)': listedness_event_level_display,
                 'Reportability': reportability,
                 'App Assessment': '',
@@ -904,6 +926,7 @@ with tab2:
 st.markdown("""
 **Developed by Jagamohan** _Disclaimer: App is in developmental stage, validate before using the data._
 """, unsafe_allow_html=True)
+
 
 
 
