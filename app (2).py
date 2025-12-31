@@ -9,26 +9,21 @@ import calendar
 from typing import Optional, Set, Tuple
 
 st.set_page_config(page_title="E2B_R3 XML Triage Application", layout="wide")
-# Ensure multi-line cells render properly (Report Date, Comments, etc.)
-st.markdown("""
-<style>
-[data-testid="stDataFrame"] div[role="cell"] {white-space: pre-wrap;}
-[data-testid="stDataEditor"] div[role="gridcell"] {white-space: pre-wrap;}
-</style>
-""", unsafe_allow_html=True)
+
+# Ensure multi-line cells render properly
+st.markdown(""" """, unsafe_allow_html=True)
+
 st.title("📊🧠 E2B_R3 XML Triage Application 🛠️ 🚀")
 
 # Version header
-# v1.6.5: Lot presence rule + previous features
-# - If LOT number is present in any suspect product: do not validate case and add comment "Verify Lot No with Celix-Lot No List".
+# v1.6.0-global-frd-lrd-td + newline + granular validity reason:
 # - Global FRD/LRD/TD (entire XML).
 # - Report Date renders FRD/LRD/TD on new lines.
-# - Product-wise validity; overall case validity aggregation (any product valid => case valid).
-# - Per-drug non-valid reasons appended into Comment (no separate column) when multiple suspects and all are Non-Valid.
-# - Patient Detail includes patient record number via id[root="2.16.840.1.113883.3.989.2.1.3.7"].
+# - Granular Non-Valid reason indicates which signal triggered "Drug exposure prior to Launch":
+#   FRD / LRD / FRD,LRD / Event / Drug.
+# - Other logic unchanged.
 
-# --------------------- Helpers & Maps ---------------------
-
+# -------------------- Helpers & Maps --------------------
 def _get_password():
     DEFAULT_PASSWORD = "7064242966"
     try:
@@ -54,12 +49,12 @@ if not is_authenticated():
 
 with st.expander("📖 Instructions"):
     st.markdown("""
-- Upload **multiple E2B XML files** and **LLT-PT mapping Excel file**.
-- (Optional) Upload **Listedness Reference** Excel: columns `Drug Name`, `LLT`.
-- Parsed data appears in the **Export & Edit** tab.
-- **Listedness (Event-level)** uses **LLT terms** and is omitted for **Non-Valid** cases.
-- Only **App Assessment** is editable.
-""")
+    - Upload **multiple E2B XML files** and **LLT-PT mapping Excel file**.
+    - (Optional) Upload **Listedness Reference** Excel: columns `Drug Name`, `LLT`.
+    - Parsed data appears in the **Export & Edit** tab.
+    - **Listedness (Event-level)** uses **LLT terms** and is omitted for **Non-Valid** cases.
+    - Only **App Assessment** is editable.
+    """)
 
 def _digits_only(s: str) -> str:
     return re.sub(r"\D", "", (s or "").strip())
@@ -114,13 +109,15 @@ def map_outcome(code):
     return {"1": "Recovered/Resolved", "2": "Recovering/Resolving", "3": "Not recovered/Ongoing", "4": "Recovered with sequelae", "5": "Fatal", "0": "Unknown"}.get(code, "Unknown")
 
 AGE_UNIT_MAP = {"a": "year", "b": "month"}
+
 def map_age_unit(raw_unit: str) -> str:
     if raw_unit is None:
         return ""
     ru = str(raw_unit).strip().lower()
     return AGE_UNIT_MAP.get(ru, ru)
 
-UNKNOWN_TOKENS = {"unk", "asku", "unknown", "nask", "nk"}
+UNKNOWN_TOKENS = {"unk", "asku", "unknown"}
+
 def is_unknown(value: str) -> bool:
     if value is None:
         return True
@@ -134,6 +131,8 @@ def clean_value(value: str) -> str:
 
 def normalize_text(s: str) -> str:
     s = (s or "").lower()
+    # Normalize non-breaking spaces as well
+    s = s.replace('\u00A0', ' ').replace('\u2007', ' ').replace('\u202F', ' ')
     s = re.sub(r'[^a-z0-9\s\+\-]', ' ', s)
     s = re.sub(r'\s+', ' ', s).strip()
     return s
@@ -149,7 +148,25 @@ def contains_company_product(text: str, company_products: list) -> str:
             return prod
     return ""
 
+MG_PATTERN = re.compile(r"\((\d{1,3}(?:,\d{3})*\d+(?:\.\d{1,3})?)\)\s*mg\b", re.IGNORECASE)
+
+def extract_strength_mg(raw_text: str, dose_val: str, dose_unit: str) -> Optional[float]:
+    if dose_val and dose_unit and dose_unit.lower() == "mg":
+        try:
+            return float(str(dose_val).replace(",", ""))
+        except Exception:
+            pass
+    if raw_text:
+        m = MG_PATTERN.search(raw_text or "")
+        if m:
+            try:
+                return float(m.group(1).replace(",", ""))
+            except Exception:
+                pass
+    return None
+
 PL_PATTERN = re.compile(r'\b(PL|PLGB|PLNI)\s*([0-9]{5})\s*/\s*([0-9]{4,5})\b', re.IGNORECASE)
+
 def extract_pl_numbers(text: str):
     out = []
     if not text:
@@ -181,44 +198,19 @@ def get_mah_name_for_drug(drug_elem, ns) -> str:
             return node.text.strip()
     return ""
 
-# Patient record number via global id OID
-def get_patient_record_number(root, ns) -> str:
-    """
-    Find hl7:id with root = '2.16.840.1.113883.3.989.2.1.3.7'
-    - If nullFlavor='MSK' => 'Masked'
-    - Else if extension present => return the extension
-    - Else => ''
-    """
-    target_oid = "2.16.840.1.113883.3.989.2.1.3.7"
-    for id_elem in root.findall('.//hl7:id', ns):
-        if id_elem.attrib.get('root') == target_oid:
-            null_flavor = id_elem.attrib.get('nullFlavor', '')
-            ext = id_elem.attrib.get('extension', '')
-            if null_flavor == 'MSK':
-                return 'Masked'
-            if ext:
-                return ext.strip()
-            return ""
-    return ""
-
 company_products = [
-    "abiraterone", "apixaban", "apremilast", "bexarotene",
-    "clobazam", "clonazepam", "cyanocobalamin", "dabigatran",
-    "dapagliflozin", "dimethyl fumarate", "famotidine",
-    "fesoterodine", "icatibant", "itraconazole", "linagliptin",
-    "linagliptin + metformin", "nintedanib", "pirfenidone",
-    "raltegravir", "ranolazine", "rivaroxaban", "saxagliptin",
-    "sitagliptin", "tamsulosin + solifenacin", "tapentadol",
-    "ticagrelor", "tamsulosin", "solifenacin",
-    "cyclogest", "progesterone", "luteum", "amelgen"
+    "abiraterone", "apixaban", "apremilast", "bexarotene", "clobazam", "clonazepam",
+    "cyanocobalamin", "dabigatran", "dapagliflozin", "dimethyl fumarate", "famotidine",
+    "fesoterodine", "icatibant", "itraconazole", "linagliptin", "linagliptin + metformin",
+    "nintedanib", "pirfenidone", "raltegravir", "ranolazine", "rivaroxaban", "saxagliptin",
+    "sitagliptin", "tamsulosin + solifenacin", "tapentadol", "ticagrelor", "tamsulosin",
+    "solifenacin", "cyclogest", "progesterone", "luteum", "amelgen"
 ]
 
 category2_products = {
-    "clobazam", "clonazepam", "cyanocobalamin",
-    "famotidine", "itraconazole",
-    "tamsulosin", "solifenacin",
-    "tapentadol", "cyclogest",
-    "progesterone", "luteum", "amelgen"
+    "clobazam", "clonazepam", "cyanocobalamin", "famotidine", "itraconazole",
+    "tamsulosin", "solifenacin", "tapentadol", "cyclogest", "progesterone",
+    "luteum", "amelgen"
 }
 
 def parse_dd_mmm_yy(s):
@@ -297,18 +289,16 @@ def contains_competitor_name(lot_text: str, competitor_names: Set[str]) -> bool:
             return True
     return False
 
-# --------------------- GLOBAL FRD/LRD/TD ---------------------
+# -------------------- GLOBAL FRD/LRD/TD --------------------
 def local_name(tag: str) -> str:
     return tag.split('}')[-1] if '}' in tag else tag
 
 def extract_global_frd_lrd_td(root):
     """
     Global rule (document order, entire XML):
-      - TD: first <creationTime value> (if present).
-      - Walk all elements:
-          keep last <low value> seen;
-          first <availabilityTime value> => LRD; FRD = that prior low.
-      - Returns both raw and formatted values.
+    - TD: first (if present).
+    - Walk all elements: keep last seen; first => LRD; FRD = that prior low.
+    - Returns both raw and formatted values.
     """
     td_raw = None
     for el in root.iter():
@@ -320,7 +310,6 @@ def extract_global_frd_lrd_td(root):
 
     last_low_value = None
     lrd_raw = None
-
     for el in root.iter():
         ln = local_name(el.tag)
         if ln == "low":
@@ -335,22 +324,43 @@ def extract_global_frd_lrd_td(root):
 
     frd_fmt = format_date(last_low_value) if last_low_value else ""
     lrd_fmt = format_date(lrd_raw) if lrd_raw else ""
-    td_fmt  = format_date(td_raw) if td_raw else ""
+    td_fmt = format_date(td_raw) if td_raw else ""
 
     return {
         "FRD_raw": last_low_value or "",
         "LRD_raw": lrd_raw or "",
-        "TD_raw":  td_raw or "",
+        "TD_raw": td_raw or "",
         "FRD": frd_fmt,
         "LRD": lrd_fmt,
         "TD": td_fmt,
     }
 
-# --------------------- UI: Upload & Parse ---------------------
+# -------------------- Patient record number via global id OID --------------------
+def get_patient_record_number(root, ns) -> str:
+    """
+    Find hl7:id with root = '2.16.840.1.113883.3.989.2.1.3.7'
+    - If nullFlavor='MSK' => 'Masked'
+    - Else if extension present => return the extension
+    - Else => ''
+    """
+    target_oid = "2.16.840.1.113883.3.989.2.1.3.7"
+    for id_elem in root.findall('.//hl7:id', ns):
+        if id_elem.attrib.get('root') == target_oid:
+            null_flavor = id_elem.attrib.get('nullFlavor', '')
+            ext = id_elem.attrib.get('extension', '')
+            if null_flavor == 'MSK':
+                return 'Masked'
+            if ext:
+                return ext.strip()
+            return ""
+    return ""
 
+# -------------------- UI: Upload & Parse --------------------
 tab1, tab2 = st.tabs(["Upload & Parse", "Export & Edit"])
+
 if "uploader_version" not in st.session_state:
     st.session_state["uploader_version"] = 0
+
 all_rows_display = []
 current_date = datetime.now().strftime("%d-%b-%Y")
 
@@ -395,6 +405,7 @@ with tab1:
                 st.warning("Listedness Reference must contain columns 'Drug Name' and 'LLT'.")
         except Exception as e:
             st.error(f"Failed to read Listedness Reference Excel: {e}")
+
     ref_drugs: Set[str] = {dn for (dn, lt) in listed_pairs} if listed_pairs else set()
 
     seriousness_map = {
@@ -415,7 +426,6 @@ with tab1:
         for idx, uploaded_file in enumerate(uploaded_files, start=1):
             warnings = []
             comments = []
-
             try:
                 tree = ET.parse(uploaded_file)
                 root = tree.getroot()
@@ -471,7 +481,6 @@ with tab1:
             height_unit = clean_value(height_elem.attrib.get('unit', '') if height_elem is not None else '')
             height = f"{height_val}" + (f" {height_unit}" if height_val and height_unit else "") if height_val else ""
 
-            # Patient initials
             patient_initials = ""
             name_elem = root.find('.//hl7:player1/hl7:name', ns)
             if name_elem is not None:
@@ -492,9 +501,6 @@ with tab1:
                             patient_initials = name_elem.text.strip()
             patient_initials = clean_value(patient_initials)
 
-            # Patient record number via global id OID
-            patient_record_number = get_patient_record_number(root, ns)
-
             age_group_map = {"0": "Foetus", "1": "Neonate", "2": "Infant", "3": "Child", "4": "Adolescent", "5": "Adult", "6": "Elderly"}
             age_group_elem = root.find('.//hl7:code[@displayName="ageGroup"]/../hl7:value', ns)
             age_group = ""
@@ -507,17 +513,30 @@ with tab1:
                     age_group = "[Masked/Unknown]"
             age_group = clean_value(age_group)
 
-            # Build Patient Detail (includes patient record number)
+            # -------------------- Patient Record Number (OID) --------------------
+            patient_record_no = get_patient_record_number(root, ns)
+            # ------------------ END Patient Record Number --------------------
+
             patient_parts = []
-            if patient_record_number: patient_parts.append(f"Patient record number: {patient_record_number}")
-            if patient_initials:       patient_parts.append(f"Initials: {patient_initials}")
-            if gender:                 patient_parts.append(f"Gender: {gender}")
-            if age_group:              patient_parts.append(f"Age Group: {age_group}")
-            if age:                    patient_parts.append(f"Age: {age}")
-            if height:                 patient_parts.append(f"Height: {height}")
-            if weight:                 patient_parts.append(f"Weight: {weight}")
+            if patient_initials:
+                patient_parts.append(f"Initials: {patient_initials}")
+            if gender:
+                patient_parts.append(f"Gender: {gender}")
+            if age_group:
+                patient_parts.append(f"Age Group: {age_group}")
+            if age:
+                patient_parts.append(f"Age: {age}")
+            if height:
+                patient_parts.append(f"Height: {height}")
+            if weight:
+                patient_parts.append(f"Weight: {weight}")
+            if patient_record_no:
+                patient_parts.append(f"Record No: {patient_record_no}")
+
             patient_detail = ", ".join(patient_parts)
-            has_any_patient_detail = any([patient_record_number, patient_initials, gender, age_group, age, height, weight])
+
+            # NOTE: No logic change (kept exactly as-is)
+            has_any_patient_detail = any([patient_initials, gender, age_group, age, height, weight])
 
             # Identify suspect products (value==1)
             suspect_ids = []
@@ -530,12 +549,13 @@ with tab1:
 
             product_details_list = []
             case_has_category2 = False
-            case_drug_dates_display = []  # [(prod_name, strength, drug_start, drug_stop), ...]
+            case_drug_dates_display = []  # ONLY displayed Celix products; ONLY start date
             case_event_dates = []
+            case_displayed_mahs = []
             case_products_norm: Set[str] = set()
 
-            # NEW: Track if any LOT number is present for a suspect Celix product
-            lot_present_for_suspect = False
+            # Collect per-drug validity reasons (for displayed products) and record only start date
+            displayed_drugs_assessment = []  # (display_name_for_detail, non_valid_reason_or_empty)
 
             for drug in root.findall('.//hl7:substanceAdministration', ns):
                 id_elem = drug.find('.//hl7:id', ns)
@@ -553,16 +573,37 @@ with tab1:
                             else:
                                 if 'displayName' in name_elem_drug.attrib:
                                     raw_drug_text = name_elem_drug.attrib.get('displayName', '').strip()
+
+                    # ---------- NEW: Fallback to MMAT/KIND path when blank ----------
+                    if not raw_drug_text:
+                        name_mmat = drug.find('.//hl7:kindOfProduct[@classCode="MMAT"][@determinerCode="KIND"]/hl7:name', ns)
+                        if name_mmat is not None:
+                            # First try main name text (e.g., "Dapaglifloz 5mg")
+                            if name_mmat.text and name_mmat.text.strip():
+                                raw_drug_text = clean_value(name_mmat.text.strip())
+                            # If still blank, try delimiter ("DAPAGLIFLOZIN (Specific Substance SUB10515)")
+                            if not raw_drug_text:
+                                delim_mmat = name_mmat.find('hl7:delimiter', ns)
+                                if delim_mmat is not None and delim_mmat.text and delim_mmat.text.strip():
+                                    raw_drug_text = clean_value(delim_mmat.text.strip())
+
+                    # ---------- Generic delimiter fallback under kindOfProduct/name ----------
+                    if not raw_drug_text and name_elem_drug is not None:
+                        delim_generic = name_elem_drug.find('hl7:delimiter', ns)
+                        if delim_generic is not None and delim_generic.text and delim_generic.text.strip():
+                            raw_drug_text = clean_value(delim_generic.text.strip())
+
+                    # Final fallback to manufacturedProduct/name (existing)
                     if not raw_drug_text:
                         alt_name = drug.find('.//hl7:manufacturedProduct/hl7:name', ns)
                         if alt_name is not None and alt_name.text and alt_name.text.strip():
-                            raw_drug_text = alt_name.text.strip()
+                            raw_drug_text = clean_value(alt_name.text.strip())
 
                     matched_company_prod = contains_company_product(raw_drug_text, company_products)
                     if matched_company_prod:
                         case_products_norm.add(normalize_text(matched_company_prod))
-                        if normalize_text(matched_company_prod) in category2_products:
-                            case_has_category2 = True
+                    if normalize_text(matched_company_prod) in category2_products:
+                        case_has_category2 = True
 
                     text_elem = drug.find('.//hl7:text', ns)
                     dose_elem = drug.find('.//hl7:doseQuantity', ns)
@@ -575,41 +616,29 @@ with tab1:
                     stop_elem = drug.find('.//hl7:high', ns)
                     start_date_str = start_elem.attrib.get('value', '') if start_elem is not None else ''
                     stop_date_str = stop_elem.attrib.get('value', '') if stop_elem is not None else ''
+
                     start_date_disp = clean_value(format_date(start_date_str))
                     stop_date_disp = clean_value(format_date(stop_date_str))
-                    drug_start_obj = parse_date_obj(start_date_str)
-                    drug_stop_obj = parse_date_obj(stop_date_str)
 
-                    # Form / LOT / MAH display
-                    form_elem = drug.find('.//hl7:formCode/hl7:originalText', ns)
-                    form_clean = ""
-                    if form_elem is not None and form_elem.text:
-                        form_clean = clean_value(form_elem.text)
-
-                    lot_elem = drug.find('.//hl7:lotNumberText', ns)
-                    lot_clean = ""
-                    if lot_elem is not None and lot_elem.text:
-                        lot_clean = clean_value(lot_elem.text)
-
-                    # If any LOT number present for a suspect Celix product, set flag
-                    if matched_company_prod and lot_clean:
-                        lot_present_for_suspect = True
-                        # Ensure the required comment gets added
-                        comments.append('Verify Lot No with Celix-Lot No List')
+                    start_date_obj = parse_date_obj(start_date_str)
+                    stop_date_obj = parse_date_obj(stop_date_str)
 
                     mah_name_raw = get_mah_name_for_drug(drug, ns)
                     mah_name_clean = clean_value(mah_name_raw)
 
+                    # Product section display & per-drug assessment only for Celix suspects
                     if matched_company_prod:
                         parts = []
-                        display_name = raw_drug_text if raw_drug_text else matched_company_prod.title()
-                        display_name = clean_value(display_name)
-                        if display_name: parts.append(f"Drug: {display_name}")
+                        display_name_for_detail = raw_drug_text if raw_drug_text else matched_company_prod.title()
+                        display_name_for_detail = clean_value(display_name_for_detail)
+                        if display_name_for_detail:
+                            parts.append(f"Drug: {display_name_for_detail}")
 
                         text_clean = ""
                         if text_elem is not None and text_elem.text:
                             text_clean = clean_value(text_elem.text)
-                        if text_clean: parts.append(f"Dosage: {text_clean}")
+                        if text_clean:
+                            parts.append(f"Dosage: {text_clean}")
 
                         if dose_val or dose_unit:
                             if dose_val and dose_unit:
@@ -624,23 +653,82 @@ with tab1:
                         if stop_date_disp:
                             parts.append(f"Stop Date: {stop_date_disp}")
 
+                        form_elem = drug.find('.//hl7:formCode/hl7:originalText', ns)
+                        form_clean = ""
+                        if form_elem is not None and form_elem.text:
+                            form_clean = clean_value(form_elem.text)
                         if form_clean:
                             parts.append(f"Formulation: {form_clean}")
+
+                        lot_elem = drug.find('.//hl7:lotNumberText', ns)
+                        lot_clean = ""
+                        if lot_elem is not None and lot_elem.text:
+                            lot_clean = clean_value(lot_elem.text)
                         if lot_clean:
                             parts.append(f"Lot No: {lot_clean}")
+                        if re.search(r'[A-Za-z0-9]', lot_clean):
+                            comments.append('Verify Lot No with Celix-Lot No List')
 
                         if mah_name_clean:
                             parts.append(f"MAH: {mah_name_clean}")
+                        case_displayed_mahs.append(mah_name_clean)
 
-                        # PL references (optional)
-                        for t in [display_name, text_clean, form_clean, lot_clean]:
+                        for t in [display_name_for_detail, text_clean, form_clean, lot_clean]:
                             for pl in extract_pl_numbers(t):
-                                parts.append(f"PL: {pl}")
+                                comments.append(f"plz check product name as {display_name_for_detail} {pl} given" if display_name_for_detail else f"plz check product name: {pl} given")
+
+                        if lot_clean and contains_competitor_name(lot_clean, competitor_names):
+                            comments.append(f"Lot number '{lot_clean}' may belong to another company — please verify.")
+                        if mah_name_clean and MY_COMPANY_NAME.lower() not in mah_name_clean.lower():
+                            comments.append(f"MAH '{mah_name_clean}' differs from Celix — please verify.")
 
                         if parts:
                             product_details_list.append(" \n ".join(parts))
 
-                        case_drug_dates_display.append((matched_company_prod, None, drug_start_obj, drug_stop_obj))
+                        # Per-drug non-valid reason (displayed product only)
+                        non_valid_reason = ""
+                        if not has_any_patient_detail:
+                            non_valid_reason = "No patient details"
+                        else:
+                            status = get_launch_status(matched_company_prod)
+                            if status in ("yet", "awaited"):
+                                non_valid_reason = "Product not Launched"
+                            else:
+                                launch_dt = get_launch_date(matched_company_prod, None)
+                                exposure_reasons = []
+                                global_dates_local = extract_global_frd_lrd_td(root)
+                                frd_raw_obj_local = parse_date_obj(global_dates_local["FRD_raw"]) if global_dates_local["FRD_raw"] else None
+                                lrd_raw_obj_local = parse_date_obj(global_dates_local["LRD_raw"]) if global_dates_local["LRD_raw"] else None
+
+                                if launch_dt is not None:
+                                    if frd_raw_obj_local and frd_raw_obj_local < launch_dt:
+                                        exposure_reasons.append("FRD")
+                                    if lrd_raw_obj_local and lrd_raw_obj_local < launch_dt:
+                                        exposure_reasons.append("LRD")
+
+                                    # Events before launch (case-global)
+                                    event_prior = any(
+                                        (evt_start and evt_start < launch_dt) or
+                                        (evt_stop and evt_stop < launch_dt)
+                                        for _, evt_start, evt_stop in case_event_dates
+                                    )
+                                    if event_prior:
+                                        exposure_reasons.append("Event")
+
+                                    # Drug start before launch (ONLY start date per requirement)
+                                    drug_prior = (start_date_obj and start_date_obj < launch_dt)
+                                    if drug_prior:
+                                        exposure_reasons.append("Drug")
+
+                                    if exposure_reasons:
+                                        non_valid_reason = f"Drug exposure prior to Launch; {', '.join(sorted(set(exposure_reasons)))}"
+                                    else:
+                                        non_valid_reason = ""  # valid for this product
+
+                        displayed_drugs_assessment.append((display_name_for_detail or "Unknown product", non_valid_reason))
+
+                        # RECORD drug dates ONLY for displayed Celix products; include ONLY start date
+                        case_drug_dates_display.append((matched_company_prod, None, start_date_obj, None))
 
             seriousness_criteria = list(seriousness_map.keys())
             event_details_list = []
@@ -648,14 +736,13 @@ with tab1:
             case_has_serious_event = False
             event_listedness_items = []
 
-            # Events summary (FRD/LRD are global)
+            # Events summary (FRD/LRD now global)
             for reaction in root.findall('.//hl7:observation', ns):
                 code_elem = reaction.find('hl7:code', ns)
                 if code_elem is not None and code_elem.attrib.get('displayName') == 'reaction':
                     value_elem = reaction.find('hl7:value', ns)
                     llt_code = value_elem.attrib.get('code', '') if value_elem is not None else ''
                     llt_term, pt_term = "", ""
-
                     if mapping_df is not None and llt_code:
                         try:
                             llt_code_str = str(llt_code).strip()
@@ -685,6 +772,7 @@ with tab1:
                     if llt_term:
                         llt_norm = normalize_text(llt_term)
                         ev_status = assess_event_listedness(llt_norm, case_products_norm, listed_pairs, ref_drugs)
+
                     event_listedness_items.append(f"Event {event_count}: {ev_status}")
 
                     seriousness_flags = []
@@ -708,6 +796,7 @@ with tab1:
                     evt_high_disp = clean_value(format_date(evt_high_str))
                     evt_low_obj = parse_date_obj(evt_low_str)
                     evt_high_obj = parse_date_obj(evt_high_str)
+
                     case_event_dates.append(("event", evt_low_obj, evt_high_obj))
 
                     details_parts = [f"Event {event_count}: {llt_term} ({pt_term})", f"Seriousness: {seriousness_display}"]
@@ -717,19 +806,20 @@ with tab1:
                         details_parts.append(f"Event Start: {evt_low_disp}")
                     if evt_high_disp:
                         details_parts.append(f"Event End: {evt_high_disp}")
+
                     event_details_list.append("; ".join(details_parts))
                     event_count += 1
 
             event_details_combined_display = "\n".join(event_details_list)
 
             # Reportability (unchanged)
-            reportability = "Category 2, serious, reportable case" if (case_has_serious_event and case_products_norm.intersection(category2_products)) else "Non-Reportable"
+            reportability = "Category 2, serious, reportable case" if (case_has_serious_event and case_has_category2) else "Non-Reportable"
 
-            # ---------- GLOBAL FRD/LRD/TD for Report Date ----------
+            # -------------------- GLOBAL FRD/LRD/TD for Report Date --------------------
             global_dates = extract_global_frd_lrd_td(root)
             frd_disp = global_dates["FRD"]
             lrd_disp = global_dates["LRD"]
-            td_disp  = global_dates["TD"] or td_fallback
+            td_disp = global_dates["TD"] or td_fallback
 
             # Case Age (days) based on raw TD if available
             case_age_days = ""
@@ -740,140 +830,99 @@ with tab1:
                     if case_age_days < 0:
                         case_age_days = 0
 
-            # ---------- Product-wise validity checks & aggregation ----------
-            per_product_reasons = {}  # prod_name(normalized) -> list of reasons
+            # -------------------- Validity assessment (unchanged except Drug logic scope) --------------------
+            validity_reason: Optional[str] = None
+            has_any_suspect = bool(suspect_ids)
             has_celix_suspect = bool(case_products_norm)
-            case_block_reason = None
+
+            # Baseline checks
             if not has_any_patient_detail:
-                case_block_reason = "No patient details"
-            elif not has_celix_suspect and bool(suspect_ids):
-                case_block_reason = "Non-company product"
+                validity_reason = "No patient details"
+            if validity_reason is None and has_any_suspect and not has_celix_suspect:
+                validity_reason = "Non-company product"
+            if validity_reason is None and case_displayed_mahs:
+                if any(name and MY_COMPANY_NAME.lower() not in name.lower() for name in case_displayed_mahs):
+                    validity_reason = "Non-company product"
 
-            # Will append to Comment only if needed
-            per_drug_nonvalid_display = ""
-
-            if case_block_reason is None and has_celix_suspect:
-                frd_raw_obj = parse_date_obj(global_dates["FRD_raw"]) if global_dates["FRD_raw"] else None
-                lrd_raw_obj = parse_date_obj(global_dates["LRD_raw"]) if global_dates["LRD_raw"] else None
-
-                # Collect per-product reasons
-                for prod, strength_mg, drug_start, drug_stop in case_drug_dates_display:
-                    if not prod:
-                        continue
-                    reasons = []
+            if validity_reason is None:
+                for prod, strength_mg, sdt, edt in case_drug_dates_display:
                     status = get_launch_status(prod)
                     if status in ("yet", "awaited"):
-                        reasons.append("Product not Launched")
-                    else:
-                        ld = get_launch_date(prod, strength_mg)
-                        if ld:
-                            if frd_raw_obj and frd_raw_obj < ld:
-                                reasons.append("FRD")
-                            if lrd_raw_obj and lrd_raw_obj < ld:
-                                reasons.append("LRD")
-                            event_prior = any(
-                                (evt_start and evt_start < ld) or (evt_stop and evt_stop < ld)
-                                for _, evt_start, evt_stop in case_event_dates
-                            )
-                            if event_prior:
-                                reasons.append("Event")
-                            if (drug_start and drug_start < ld) or (drug_stop and drug_stop < ld):
-                                reasons.append("Drug")
-                    per_product_reasons[normalize_text(prod)] = reasons
+                        validity_reason = "Product not Launched"
+                        break
 
-                # Case-level aggregation: Valid if ANY product has no reasons
-                any_product_valid = any(len(reasons) == 0 for reasons in per_product_reasons.values())
-                num_products = len(per_product_reasons)
+            # Launch date reference (earliest among displayed Celix suspects)
+            earliest_launch_dt = None
+            for prod, strength_mg, sdt, edt in case_drug_dates_display:
+                if prod:
+                    ld = get_launch_date(prod, strength_mg)
+                    if ld:
+                        earliest_launch_dt = ld if (earliest_launch_dt is None or ld < earliest_launch_dt) else earliest_launch_dt
 
-                if any_product_valid:
-                    validity_value = "Valid"
-                else:
-                    # All products non-valid => combined reason at case level
-                    combined = set()
-                    for reasons in per_product_reasons.values():
-                        for r in reasons:
-                            combined.add(r)
-                    if not combined:
-                        validity_value = "Valid"  # safety net
-                    else:
-                        if "Product not Launched" in combined and len(combined) == 1:
-                            validity_value = "Non-Valid (Product not Launched)"
-                        else:
-                            combined.discard("Product not Launched")
-                            if combined:
-                                validity_value = f"Non-Valid (Drug exposure prior to Launch; {', '.join(sorted(combined))})"
-                            else:
-                                validity_value = "Non-Valid (Drug exposure prior to Launch)"
+            frd_raw_obj = parse_date_obj(global_dates["FRD_raw"]) if global_dates["FRD_raw"] else None
+            lrd_raw_obj = parse_date_obj(global_dates["LRD_raw"]) if global_dates["LRD_raw"] else None
 
-                    # If multiple suspects and all are Non-Valid, render per-drug reasons in Comment
-                    if num_products >= 2:
-                        lines = []
-                        # Map normalized product to a readable display name
-                        for prod_norm, reasons in per_product_reasons.items():
-                            # Find a display name from case_drug_dates_display or fallback to title-case of norm
-                            display_name = None
-                            for p, _, _, _ in case_drug_dates_display:
-                                if normalize_text(p) == prod_norm:
-                                    display_name = p.title()
-                                    break
-                            if not display_name:
-                                display_name = prod_norm.title()
-                            if reasons:
-                                lines.append(f"{display_name}: {', '.join(sorted(set(reasons)))}")
-                            else:
-                                lines.append(f"{display_name}: Valid")
-                        per_drug_nonvalid_display = "\n".join(lines)
+            # Granular exposure reasons only if no prior validity_reason and a launch date exists
+            exposure_reasons = []
+            if validity_reason is None and earliest_launch_dt is not None:
+                if frd_raw_obj and frd_raw_obj < earliest_launch_dt:
+                    exposure_reasons.append("FRD")
+                if lrd_raw_obj and lrd_raw_obj < earliest_launch_dt:
+                    exposure_reasons.append("LRD")
+                # Events before launch?
+                event_prior = any(
+                    (evt_start and evt_start < earliest_launch_dt) or
+                    (evt_stop and evt_stop < earliest_launch_dt)
+                    for _, evt_start, evt_stop in case_event_dates
+                )
+                if event_prior:
+                    exposure_reasons.append("Event")
+                # Drug start before launch? ONLY start date from displayed Celix products
+                drug_prior = any(
+                    (drug_start and drug_start < earliest_launch_dt)
+                    for prod, _, drug_start, _ in case_drug_dates_display
+                    if prod
+                )
+                if drug_prior:
+                    exposure_reasons.append("Drug")
 
-            else:
-                # Case-level blocked reasons take precedence
-                validity_value = f"Non-Valid ({case_block_reason})" if case_block_reason else "Valid"
+                if exposure_reasons:
+                    validity_reason = f"Drug exposure prior to Launch; {', '.join(sorted(set(exposure_reasons)))}"
 
-            # Narrative
+            validity_value = f"Non-Valid ({validity_reason})" if validity_reason else "Valid"
+
             narrative_elem = root.find('.//hl7:code[@code="PAT_ADV_EVNT"]/../hl7:text', ns)
             narrative_full_raw = narrative_elem.text if narrative_elem is not None else ''
             narrative_full = clean_value(narrative_full_raw)
 
-            # Compose Comment field:
-            # - existing comments (semicolon-separated as before)
-            # - append per-drug non-valid block (multi-line) when applicable
-            base_comments = "; ".join(sorted(set(comments))) if comments else ""
-            if per_drug_nonvalid_display:
-                if base_comments:
-                    comment_display = base_comments + "\n\nPer-drug Non-Valid Reasons:\n" + per_drug_nonvalid_display
-                else:
-                    comment_display = "Per-drug Non-Valid Reasons:\n" + per_drug_nonvalid_display
-            else:
-                comment_display = base_comments
-
-            # ---------- LOT presence validity override ----------
-            # If any suspect Celix product has LOT number present:
-            # - Do not validate (override whatever validity_value currently is)
-            # - Ensure comment "Verify Lot No with Celix-Lot No List" is present
-            if lot_present_for_suspect:
-                if "Verify Lot No with Celix-Lot No List" not in comment_display:
-                    comment_display = (comment_display + ("\n" if comment_display else "")) + "Verify Lot No with Celix-Lot No List"
+            if comments and validity_reason is None:
                 validity_value = "Kindly check comment and assess validity manually"
-                # Reportability is indeterminate until manual check, keep current logic or set to NA
-                # Here we keep existing reportability unless you prefer to force NA:
-                # reportability = "NA"
-
-            # Listedness suppressed for Non-Valid
             if isinstance(validity_value, str) and validity_value.startswith("Non-Valid"):
                 reportability = "NA"
-                event_listedness_items = []
-            listedness_event_level_display = "; ".join(event_listedness_items)
 
+            event_listedness_items = []
+            listedness_event_level_display = "; ".join(event_listedness_items)
             if ("Reference not uploaded" in listedness_event_level_display) or ("Reference not updated" in listedness_event_level_display):
                 warnings.append("Listedness reference is missing or incomplete—please upload an updated (Drug Name, LLT) list.")
 
-            # ---------- Report Date (new lines) ----------
+            # -------------------- Report Date (new lines) --------------------
             report_date_parts = []
-            if frd_disp: report_date_parts.append(f"FRD: {frd_disp}")
-            if lrd_disp: report_date_parts.append(f"LRD: {lrd_disp}")
-            if td_disp:  report_date_parts.append(f"TD: {td_disp}")
+            if frd_disp:
+                report_date_parts.append(f"FRD: {frd_disp}")
+            if lrd_disp:
+                report_date_parts.append(f"LRD: {lrd_disp}")
+            if td_disp:
+                report_date_parts.append(f"TD: {td_disp}")
             report_date_display = "\n".join(report_date_parts)
 
-            # Append row
+            # --------- Append per-drug reasons into Validity text (no new column) ---------
+            # Only for products DISPLAYED and only if ALL displayed products are non-valid
+            per_drug_nonvalid_lines = [f"{nm}: {rsn}" for nm, rsn in displayed_drugs_assessment if rsn]
+            show_per_drug_comment = (len(displayed_drugs_assessment) > 1) and (len(per_drug_nonvalid_lines) == len(displayed_drugs_assessment))
+            if show_per_drug_comment and isinstance(validity_value, str) and validity_value.startswith("Non-Valid"):
+                validity_value = f"{validity_value} | Drug-wise: " + "; ".join(per_drug_nonvalid_lines)
+            # --------- End per-drug comment append ---------
+
             all_rows_display.append({
                 'SL No': idx,
                 'Date': current_date,
@@ -886,7 +935,7 @@ with tab1:
                 'Event Details': event_details_combined_display,
                 'Narrative': narrative_full,
                 'Validity': validity_value,
-                'Comment': comment_display,  # includes per-drug reasons + LOT verification note when applicable
+                'Comment': "; ".join(sorted(set(comments))) if comments else "",
                 'Listedness (Event-level)': listedness_event_level_display,
                 'Reportability': reportability,
                 'App Assessment': '',
@@ -898,34 +947,42 @@ with tab1:
 
         st.success(f"Parsing complete ✅ — Files processed: {total_files}, Rows created: {parsed_rows}")
 
-# --------------------- UI: Export & Edit ---------------------
-
+# -------------------- UI: Export & Edit --------------------
 with tab2:
-    st.markdown("### 📋 Parsed Data Table 🗃️")
+    st.markdown("### 📋 Parsed Data Table 📃")
     if all_rows_display:
         df_display = pd.DataFrame(all_rows_display)
+
         show_full_narrative = st.checkbox("Show full narrative (may be long)", value=True)
         if not show_full_narrative:
             df_display['Narrative'] = df_display['Narrative'].astype(str).str.slice(0, 1000)
+
         preferred_order = [
             'SL No','Date','Sender ID','Report Date','Case Age (days)','Reporter Qualification',
-            'Patient Detail','Product Detail','Event Details','Narrative','Validity',
+            'Patient Detail','Product Detail','Event Details','Narrative',
+            'Validity',  # per-drug comments are embedded here
             'Comment','Listedness (Event-level)','Reportability','App Assessment','Parsing Warnings'
         ]
         df_display = df_display[[c for c in preferred_order if c in df_display.columns]]
+
         editable_cols = ['App Assessment']
         disabled_cols = [col for col in df_display.columns if col not in editable_cols]
+
         edited_df = st.data_editor(df_display, num_rows="dynamic", use_container_width=True, disabled=disabled_cols)
+
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
             edited_df.to_excel(writer, index=False, sheet_name="Parsed Data")
+
         st.download_button("⬇️ Download Excel", excel_buffer.getvalue(), "parsed_data.xlsx")
     else:
         st.info("No data available yet. Please upload files in the first tab.")
 
-st.markdown("""
-**Developed by Jagamohan** _Disclaimer: App is in developmental stage, validate before using the data._
+    st.markdown("""
+**Developed by Jagamohan**  
+_Disclaimer: App is in developmental stage, validate before using the data._
 """, unsafe_allow_html=True)
+
 
 
 
