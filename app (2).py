@@ -120,7 +120,7 @@ def map_age_unit(raw_unit: str) -> str:
     ru = str(raw_unit).strip().lower()
     return AGE_UNIT_MAP.get(ru, ru)
 
-UNKNOWN_TOKENS = {"unk", "asku", "unknown"}
+UNKNOWN_TOKENS = {"unk", "asku", "unknown", "nask", "nk"}
 def is_unknown(value: str) -> bool:
     if value is None:
         return True
