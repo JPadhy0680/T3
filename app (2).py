@@ -15,14 +15,11 @@ st.markdown(""" """, unsafe_allow_html=True)
 st.title("📊🧠 E2B_R3 XML Triage Application 🛠️ 🚀")
 
 # ---------------------------------------------------------------------------------
-# v1.9.0-listedness-per-event:
-# - Added per-event Listedness evaluation.
-# - For each event (LLT), we check against every suspect Celix product in the case.
-#   If any (Drug Name, LLT) pair is present in the Listedness Excel, that event is
-#   marked Listed and we show the matching product(s).
-# - A new column 'Event-wise Listedness' enumerates each event's listedness.
-# - The existing case-level 'Listedness' column now reflects whether ANY event is Listed.
-# - All other logic (parsing, validity, reportability) remains unchanged.
+# v1.9.1-listedness-per-event-ui:
+# - Per-event Listedness maintained and now exposed in a dedicated Event-level table
+#   with one row per event across all cases.
+# - Excel export now contains two sheets: 'Parsed Data' (case-level) and 'Event-Level'.
+# - Fixed minor typo (exposure_reasons variable).
 # ---------------------------------------------------------------------------------
 
 # ------------------------------ Helpers & Maps ----------------------------------
@@ -60,8 +57,9 @@ with st.expander("📖 Instructions"):
     - Upload **multiple E2B XML files**.
     - (Optional) Upload **LLT–PT mapping Excel** to enrich event names.
     - (Optional) Upload **Listedness Excel** with two columns: **Drug Name**, **LLT**.
-      We will compute **Listedness per event** (and overall per case).
-    - Parsed data appears in the **Export & Edit** tab. Only **App Assessment** is editable.
+      We compute **Listedness per event** *and* overall per case.
+    - In **Export & Edit**, use the **Case-level** and **Event-level** tabs.
+    - Only **App Assessment** is editable at case-level.
     """)
 
 def _digits_only(s: str) -> str:
@@ -157,6 +155,7 @@ def normalize_text(s: str) -> str:
     return s
 
 # --- Listedness helpers ---------------------------------------------------------
+
 def to_pair_set(df: pd.DataFrame) -> Set[Tuple[str, str]]:
     """Build a set of normalized (drug, llt) pairs from columns 'Drug Name', 'LLT'."""
     pairs: Set[Tuple[str, str]] = set()
@@ -176,7 +175,7 @@ def to_pair_set(df: pd.DataFrame) -> Set[Tuple[str, str]]:
     return pairs
 
 # Robust mg-extraction pattern (e.g., "10 mg", "2,500 mg", "12.5 mg")
-MG_PATTERN = re.compile(r"\b(\d{1,3}(?:,\d{3})*\.?\d{0,3})\s*mg\b", re.IGNORECASE)
+MG_PATTERN = re.compile(r"(\d{1,3}(?:,\d{3})*\.?\d{0,3})\s*mg", re.IGNORECASE)
 
 def extract_strength_mg(raw_text: str, dose_val: str, dose_unit: str) -> Optional[float]:
     if dose_val and dose_unit and dose_unit.lower() == "mg":
@@ -194,7 +193,7 @@ def extract_strength_mg(raw_text: str, dose_val: str, dose_unit: str) -> Optiona
     return None
 
 # PL pattern e.g., "PL 12345/6789", "PLGB 12345/6789"
-PL_PATTERN = re.compile(r'\b(PL|PLGB|PLNI)\s*([0-9]{5})\s*/\s*([0-9]{4,5})\b', re.IGNORECASE)
+PL_PATTERN = re.compile(r'(PL|PLGB|PLNI)\s*([0-9]{5})\s*/\s*([0-9]{4,5})', re.IGNORECASE)
 
 def extract_pl_numbers(text: str):
     out = []
@@ -267,9 +266,9 @@ LAUNCH_INFO = {
     "raltegravir": ("awaited", None),
     "ranolazine": ("launched", parse_dd_mmm_yy("20-Jul-23")),
     "rivaroxaban": ("launched_by_strength", {2.5: parse_dd_mmm_yy("02-Apr-24"),
-                                             10.0: parse_dd_mmm_yy("23-May-24"),
-                                             15.0: parse_dd_mmm_yy("23-May-24"),
-                                             20.0: parse_dd_mmm_yy("23-May-24")}),
+                                               10.0: parse_dd_mmm_yy("23-May-24"),
+                                               15.0: parse_dd_mmm_yy("23-May-24"),
+                                               20.0: parse_dd_mmm_yy("23-May-24")}),
     "saxagliptin": ("yet", None),
     "sitagliptin": ("yet", None),
     "tamsulosin + solifenacin": ("launched", parse_dd_mmm_yy("08-May-23")),
@@ -393,6 +392,7 @@ if "uploader_version" not in st.session_state:
     st.session_state["uploader_version"] = 0
 
 all_rows_display: List[Dict] = []
+all_event_rows: List[Dict] = []
 current_date = datetime.now().strftime("%d-%b-%Y")
 
 with tab1:
@@ -572,7 +572,6 @@ with tab1:
                 patient_parts.append(f"Record No: {patient_record_no}")
             patient_detail = ", ".join(patient_parts)
 
-            # NOTE: No logic change (kept exactly as-is)
             has_any_patient_detail = any([patient_initials, gender, age_group, age, height, weight])
 
             # Identify suspect products (value==1)
@@ -621,7 +620,7 @@ with tab1:
                             pnorm = normalize_text(prod)
                             if not pnorm:
                                 continue
-                            pattern = r'\b' + re.escape(pnorm) + r'\b'
+                            pattern = r'' + re.escape(pnorm) + r''
                             if re.search(pattern, norm):
                                 return prod
                         return ""
@@ -707,7 +706,8 @@ with tab1:
                             comments.append(f"MAH '{mah_name_clean}' differs from Celix — please verify.")
 
                         if parts:
-                            product_details_list.append(" \n ".join(parts))
+                            product_details_list.append(" 
+ ".join(parts))
 
                         # Per-drug non-valid reason (displayed product only)
                         non_valid_reason = ""
@@ -817,7 +817,6 @@ with tab1:
                     base = f"Event {event_count}: {llt_term} ({pt_term})" if pt_term else f"Event {event_count}: {llt_term}"
                     listedness_text = "Unlisted"
                     if is_event_listed:
-                        # show matched product names (denormalized for readability)
                         pretty = ", ".join(sorted({p for p in matched_products_for_event}))
                         listedness_text = f"Listed ({pretty})"
                     details_parts = [base, f"Listedness: {listedness_text}", f"Seriousness: {seriousness_display}"]
@@ -827,13 +826,30 @@ with tab1:
                         details_parts.append(f"Event Start: {evt_low_disp}")
                     if evt_high_disp:
                         details_parts.append(f"Event End: {evt_high_disp}")
-
                     event_details_list.append("; ".join(details_parts))
                     event_listedness_lines.append(f"Event {event_count}: {listedness_text}")
+
+                    # ---- Accumulate Event-level row ----
+                    all_event_rows.append({
+                        'SL No': idx,
+                        'Event #': event_count,
+                        'Sender ID': sender_id,
+                        'LLT': llt_term,
+                        'PT': pt_term,
+                        'Seriousness': "Non-serious" if not seriousness_flags else ", ".join(seriousness_flags),
+                        'Outcome': outcome,
+                        'Event Start': evt_low_disp,
+                        'Event End': evt_high_disp,
+                        'Event Listedness': 'Listed' if is_event_listed else 'Unlisted',
+                        'Matched Products': ", ".join(sorted(set(matched_products_for_event))) if matched_products_for_event else ""
+                    })
+
                     event_count += 1
 
-            event_details_combined_display = "\n".join(event_details_list)
-            event_wise_listedness_display = "\n".join(event_listedness_lines) if event_listedness_lines else ""
+            event_details_combined_display = "
+".join(event_details_list)
+            event_wise_listedness_display = "
+".join(event_listedness_lines) if event_listedness_lines else ""
 
             # Reportability (unchanged)
             reportability = "Category 2, serious, reportable case" if (case_has_serious_event and case_has_category2) else "Non-Reportable"
@@ -926,22 +942,21 @@ with tab1:
                 report_date_parts.append(f"LRD: {lrd_disp}")
             if td_disp:
                 report_date_parts.append(f"TD: {td_disp}")
-            report_date_display = "\n".join(report_date_parts)
+            report_date_display = "
+".join(report_date_parts)
 
             # ---------- Append per-drug reasons into Validity text (no new column) ---
             per_drug_nonvalid_lines = [f"{nm}: {rsn}" for nm, rsn in displayed_drugs_assessment if rsn]
             show_per_drug_comment = (len(displayed_drugs_assessment) > 1) and (len(per_drug_nonvalid_lines) == len(displayed_drugs_assessment))
             if show_per_drug_comment and isinstance(validity_value, str) and validity_value.startswith("Non-Valid"):
-                validity_value = f"{validity_value} \n Drug-wise: " + "; ".join(per_drug_nonvalid_lines)
+                validity_value = f"{validity_value} 
+ Drug-wise: " + "; ".join(per_drug_nonvalid_lines)
 
             # ------------------------- LISTEDNESS (EVENT & CASE) --------------------
-            # Case-level = any event listed
-            case_listed = False
-            if event_listedness_lines:
-                case_listed = any('Listed' in ln for ln in event_listedness_lines)
+            case_listed = any('Listed' in ln for ln in event_listedness_lines) if event_listedness_lines else False
             listedness_val = "Listed" if case_listed else "Unlisted"
 
-            # Row add
+            # Row add (case-level)
             all_rows_display.append({
                 'SL No': idx,
                 'Date': current_date,
@@ -950,17 +965,19 @@ with tab1:
                 'Case Age (days)': case_age_days,
                 'Reporter Qualification': reporter_qualification,
                 'Patient Detail': patient_detail,
-                'Product Detail': " \n ".join(product_details_list),
+                'Product Detail': " 
+ ".join(product_details_list),
                 'Event Details': event_details_combined_display,
                 'Event-wise Listedness': event_wise_listedness_display,
                 'Narrative': narrative_full,
                 'Validity': validity_value,
-                'Listedness': listedness_val,  # case-level
+                'Listedness': listedness_val,
                 'Comment': "; ".join(sorted(set(comments))) if comments else "",
                 'Reportability': reportability,
                 'App Assessment': '',
                 'Parsing Warnings': "; ".join(warnings) if warnings else ""
             })
+
             parsed_rows += 1
             progress.progress(idx / total_files)
 
@@ -968,34 +985,46 @@ with tab1:
 
 # -------------------------------- UI: Export & Edit -----------------------------
 with tab2:
-    st.markdown("### 📋 Parsed Data Table 📃")
+    st.markdown("### 📋 Parsed Data Tables")
     if all_rows_display:
-        df_display = pd.DataFrame(all_rows_display)
-        show_full_narrative = st.checkbox("Show full narrative (may be long)", value=True)
-        if not show_full_narrative:
-            df_display['Narrative'] = df_display['Narrative'].astype(str).str.slice(0, 1000)
+        case_tab, event_tab = st.tabs(["Case-level (Parsed Data)", "Event-level (Per Event)"])
 
-        preferred_order = [
-            'SL No','Date','Sender ID','Report Date','Case Age (days)','Reporter Qualification',
-            'Patient Detail','Product Detail','Event Details','Event-wise Listedness','Narrative',
-            'Validity','Listedness',  # keep case-level Listedness visible near Validity
-            'Comment','Reportability','App Assessment','Parsing Warnings'
-        ]
-        df_display = df_display[[c for c in preferred_order if c in df_display.columns]]
+        with case_tab:
+            df_display = pd.DataFrame(all_rows_display)
+            show_full_narrative = st.checkbox("Show full narrative (may be long)", value=True, key="narrative_case")
+            if not show_full_narrative:
+                df_display['Narrative'] = df_display['Narrative'].astype(str).str.slice(0, 1000)
 
-        editable_cols = ['App Assessment']
-        disabled_cols = [col for col in df_display.columns if col not in editable_cols]
-        edited_df = st.data_editor(
-            df_display,
-            num_rows="dynamic",
-            use_container_width=True,
-            disabled=disabled_cols
-        )
+            preferred_order = [
+                'SL No','Date','Sender ID','Report Date','Case Age (days)','Reporter Qualification',
+                'Patient Detail','Product Detail','Event Details','Event-wise Listedness','Narrative',
+                'Validity','Listedness',  # case-level Listedness near Validity
+                'Comment','Reportability','App Assessment','Parsing Warnings'
+            ]
+            df_display = df_display[[c for c in preferred_order if c in df_display.columns]]
 
+            editable_cols = ['App Assessment']
+            disabled_cols = [col for col in df_display.columns if col not in editable_cols]
+            edited_df = st.data_editor(
+                df_display,
+                num_rows="dynamic",
+                use_container_width=True,
+                disabled=disabled_cols
+            )
+
+        with event_tab:
+            df_events = pd.DataFrame(all_event_rows) if all_event_rows else pd.DataFrame()
+            if df_events.empty:
+                st.info("No events were parsed.")
+            else:
+                st.dataframe(df_events, use_container_width=True)
+
+        # --- Excel export with two sheets ---
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-            edited_df.to_excel(writer, index=False, sheet_name="Parsed Data")
-        st.download_button("⬇️ Download Excel", excel_buffer.getvalue(), "parsed_data.xlsx")
+            pd.DataFrame(all_rows_display).to_excel(writer, index=False, sheet_name="Parsed Data")
+            pd.DataFrame(all_event_rows).to_excel(writer, index=False, sheet_name="Event-Level")
+        st.download_button("⬇️ Download Excel (Case + Event)", excel_buffer.getvalue(), "parsed_data_with_events.xlsx")
     else:
         st.info("No data available yet. Please upload files in the first tab.")
 
@@ -1003,3 +1032,4 @@ st.markdown("""
 **Developed by Jagamohan**
 _Disclaimer: App is in developmental stage, validate before using the data._
 """, unsafe_allow_html=True)
+
