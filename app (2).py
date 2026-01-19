@@ -20,7 +20,7 @@ st.title("📊🧠 E2B_R3 XML Triage Application 🛠️ 🚀")
 # - For each event (LLT), we check against every suspect Celix product in the case.
 #   If any (Drug Name, LLT) pair is present in the Listedness Excel, that event is
 #   marked Listed and we show the matching product(s).
-# - A new column 'Event-wise Listedness' enumerates each event's listedness.
+# - A new column 'Listedness' enumerates each event's listedness.
 # - The existing case-level 'Listedness' column now reflects whether ANY event is Listed.
 # - All other logic (parsing, validity, reportability) remains unchanged.
 # ---------------------------------------------------------------------------------
@@ -61,7 +61,7 @@ with st.expander("📖 Instructions"):
     - (Optional) Upload **LLT–PT mapping Excel** to enrich event names.
     - (Optional) Upload **Listedness Excel** with two columns: **Drug Name**, **LLT**.
       We will compute **Listedness per event** (and overall per case).
-    - Parsed data appears in the **Export & Edit** tab. Only **App Assessment** is editable.
+    - Parsed data appears in the **Export & Edit** tab. All columns are read-only.
     """)
 
 def _digits_only(s: str) -> str:
@@ -952,7 +952,7 @@ with tab1:
                 'Patient Detail': patient_detail,
                 'Product Detail': " \n ".join(product_details_list),
                 'Event Details': event_details_combined_display,
-                'Event-wise Listedness': event_wise_listedness_display,
+                'Listedness': event_wise_listedness_display,
                 'Narrative': narrative_full,
                 'Validity': validity_value,
                 'Listedness': listedness_val,  # case-level
@@ -977,19 +977,19 @@ with tab2:
 
         preferred_order = [
             'SL No','Date','Sender ID','Report Date','Case Age (days)','Reporter Qualification',
-            'Patient Detail','Product Detail','Event Details','Event-wise Listedness','Narrative',
-            'Validity','Listedness',  # keep case-level Listedness visible near Validity
-            'Comment','Reportability','App Assessment','Parsing Warnings'
+            'Patient Detail','Product Detail','Event Details','Listedness','Narrative',
+            'Validity',  # keep case-level Listedness visible near Validity
+            'Comment','Reportability','Parsing Warnings'
         ]
         df_display = df_display[[c for c in preferred_order if c in df_display.columns]]
 
-        editable_cols = ['App Assessment']
+        editable_cols = []
         disabled_cols = [col for col in df_display.columns if col not in editable_cols]
         edited_df = st.data_editor(
             df_display,
             num_rows="dynamic",
             use_container_width=True,
-            disabled=disabled_cols
+            disabled=df_display.columns
         )
 
         excel_buffer = io.BytesIO()
@@ -1003,4 +1003,6 @@ st.markdown("""
 **Developed by Jagamohan**
 _Disclaimer: App is in developmental stage, validate before using the data._
 """, unsafe_allow_html=True)
+
+
 
