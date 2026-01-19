@@ -820,7 +820,7 @@ with tab1:
                         # show matched product names (denormalized for readability)
                         pretty = ", ".join(sorted({p for p in matched_products_for_event}))
                         listedness_text = f"Listed ({pretty})"
-                    details_parts = [base, f"Listedness: {listedness_text}", f"Seriousness: {seriousness_display}"]
+                    details_parts = [base, f"Seriousness: {seriousness_display}"]
                     if outcome:
                         details_parts.append(f"Outcome: {outcome}")
                     if evt_low_disp:
@@ -952,7 +952,7 @@ with tab1:
                 'Patient Detail': patient_detail,
                 'Product Detail': " \n ".join(product_details_list),
                 'Event Details': event_details_combined_display,
-                'Listedness': event_wise_listedness_display,
+                'Listedness': ('' if is_non_valid_case else event_wise_listedness_display),
                 'Narrative': narrative_full,
                 'Validity': validity_value,
                 'Listedness': listedness_val,  # case-level
@@ -1003,6 +1003,8 @@ st.markdown("""
 **Developed by Jagamohan**
 _Disclaimer: App is in developmental stage, validate before using the data._
 """, unsafe_allow_html=True)
+
+
 
 
 
