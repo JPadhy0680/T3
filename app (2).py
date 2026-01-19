@@ -935,7 +935,7 @@ with tab1:
             show_per_drug_comment = (len(displayed_drugs_assessment) > 1) and (len(per_drug_nonvalid_lines) == len(displayed_drugs_assessment))
             if show_per_drug_comment and isinstance(validity_value, str) and validity_value.startswith("Non-Valid"):
                 validity_value = f"{validity_value} 
- Drug-wise: " + "; ".join(per_drug_nonvalid_lines)
+                Drug-wise: " + "; ".join(per_drug_nonvalid_lines)
 
             # ------------------------- LISTEDNESS (NEW) -----------------------------
             # Build observed (drug, llt) pairs for suspect Celix products
