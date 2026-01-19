@@ -157,7 +157,6 @@ def normalize_text(s: str) -> str:
     return s
 
 # --- Listedness helpers ---------------------------------------------------------
-
 def to_pair_set(df: pd.DataFrame) -> Set[Tuple[str, str]]:
     """Build a set of normalized (drug, llt) pairs from columns 'Drug Name', 'LLT'."""
     pairs: Set[Tuple[str, str]] = set()
@@ -177,7 +176,7 @@ def to_pair_set(df: pd.DataFrame) -> Set[Tuple[str, str]]:
     return pairs
 
 # Robust mg-extraction pattern (e.g., "10 mg", "2,500 mg", "12.5 mg")
-MG_PATTERN = re.compile(r"(\d{1,3}(?:,\d{3})*\.?\d{0,3})\s*mg", re.IGNORECASE)
+MG_PATTERN = re.compile(r"\b(\d{1,3}(?:,\d{3})*\.?\d{0,3})\s*mg\b", re.IGNORECASE)
 
 def extract_strength_mg(raw_text: str, dose_val: str, dose_unit: str) -> Optional[float]:
     if dose_val and dose_unit and dose_unit.lower() == "mg":
@@ -195,7 +194,7 @@ def extract_strength_mg(raw_text: str, dose_val: str, dose_unit: str) -> Optiona
     return None
 
 # PL pattern e.g., "PL 12345/6789", "PLGB 12345/6789"
-PL_PATTERN = re.compile(r'(PL|PLGB|PLNI)\s*([0-9]{5})\s*/\s*([0-9]{4,5})', re.IGNORECASE)
+PL_PATTERN = re.compile(r'\b(PL|PLGB|PLNI)\s*([0-9]{5})\s*/\s*([0-9]{4,5})\b', re.IGNORECASE)
 
 def extract_pl_numbers(text: str):
     out = []
@@ -268,9 +267,9 @@ LAUNCH_INFO = {
     "raltegravir": ("awaited", None),
     "ranolazine": ("launched", parse_dd_mmm_yy("20-Jul-23")),
     "rivaroxaban": ("launched_by_strength", {2.5: parse_dd_mmm_yy("02-Apr-24"),
-                                               10.0: parse_dd_mmm_yy("23-May-24"),
-                                               15.0: parse_dd_mmm_yy("23-May-24"),
-                                               20.0: parse_dd_mmm_yy("23-May-24")}),
+                                             10.0: parse_dd_mmm_yy("23-May-24"),
+                                             15.0: parse_dd_mmm_yy("23-May-24"),
+                                             20.0: parse_dd_mmm_yy("23-May-24")}),
     "saxagliptin": ("yet", None),
     "sitagliptin": ("yet", None),
     "tamsulosin + solifenacin": ("launched", parse_dd_mmm_yy("08-May-23")),
@@ -622,7 +621,7 @@ with tab1:
                             pnorm = normalize_text(prod)
                             if not pnorm:
                                 continue
-                            pattern = r'' + re.escape(pnorm) + r''
+                            pattern = r'\b' + re.escape(pnorm) + r'\b'
                             if re.search(pattern, norm):
                                 return prod
                         return ""
@@ -708,8 +707,7 @@ with tab1:
                             comments.append(f"MAH '{mah_name_clean}' differs from Celix — please verify.")
 
                         if parts:
-                            product_details_list.append(" 
- ".join(parts))
+                            product_details_list.append(" \n ".join(parts))
 
                         # Per-drug non-valid reason (displayed product only)
                         non_valid_reason = ""
@@ -834,10 +832,8 @@ with tab1:
                     event_listedness_lines.append(f"Event {event_count}: {listedness_text}")
                     event_count += 1
 
-            event_details_combined_display = "
-".join(event_details_list)
-            event_wise_listedness_display = "
-".join(event_listedness_lines) if event_listedness_lines else ""
+            event_details_combined_display = "\n".join(event_details_list)
+            event_wise_listedness_display = "\n".join(event_listedness_lines) if event_listedness_lines else ""
 
             # Reportability (unchanged)
             reportability = "Category 2, serious, reportable case" if (case_has_serious_event and case_has_category2) else "Non-Reportable"
@@ -930,15 +926,13 @@ with tab1:
                 report_date_parts.append(f"LRD: {lrd_disp}")
             if td_disp:
                 report_date_parts.append(f"TD: {td_disp}")
-            report_date_display = "
-".join(report_date_parts)
+            report_date_display = "\n".join(report_date_parts)
 
             # ---------- Append per-drug reasons into Validity text (no new column) ---
             per_drug_nonvalid_lines = [f"{nm}: {rsn}" for nm, rsn in displayed_drugs_assessment if rsn]
             show_per_drug_comment = (len(displayed_drugs_assessment) > 1) and (len(per_drug_nonvalid_lines) == len(displayed_drugs_assessment))
             if show_per_drug_comment and isinstance(validity_value, str) and validity_value.startswith("Non-Valid"):
-                validity_value = f"{validity_value} 
- Drug-wise: " + "; ".join(per_drug_nonvalid_lines)
+                validity_value = f"{validity_value} \n Drug-wise: " + "; ".join(per_drug_nonvalid_lines)
 
             # ------------------------- LISTEDNESS (EVENT & CASE) --------------------
             # Case-level = any event listed
@@ -956,8 +950,7 @@ with tab1:
                 'Case Age (days)': case_age_days,
                 'Reporter Qualification': reporter_qualification,
                 'Patient Detail': patient_detail,
-                'Product Detail': " 
- ".join(product_details_list),
+                'Product Detail': " \n ".join(product_details_list),
                 'Event Details': event_details_combined_display,
                 'Event-wise Listedness': event_wise_listedness_display,
                 'Narrative': narrative_full,
@@ -1010,18 +1003,3 @@ st.markdown("""
 **Developed by Jagamohan**
 _Disclaimer: App is in developmental stage, validate before using the data._
 """, unsafe_allow_html=True)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
