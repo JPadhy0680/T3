@@ -717,8 +717,7 @@ with tab1:
                             comments.append(f"MAH '{mah_name_clean}' differs from Celix — please verify.")
 
                         if parts:
-                            product_details_list.append(" 
- ".join(parts))
+                            product_details_list.append(" ".join(parts))
 
                         # Per-drug non-valid reason (displayed product only)
                         non_valid_reason = ""
@@ -833,8 +832,7 @@ with tab1:
                     event_details_list.append("; ".join(details_parts))
                     event_count += 1
 
-            event_details_combined_display = "
-".join(event_details_list)
+            event_details_combined_display = " ".join(event_details_list)
 
             # Reportability (unchanged)
             reportability = "Category 2, serious, reportable case" if (case_has_serious_event and case_has_category2) else "Non-Reportable"
@@ -930,8 +928,7 @@ with tab1:
                 report_date_parts.append(f"LRD: {lrd_disp}")
             if td_disp:
                 report_date_parts.append(f"TD: {td_disp}")
-            report_date_display = "
-".join(report_date_parts)
+            report_date_display = "".join(report_date_parts)
 
             # ---------- Append per-drug reasons into Validity text (no new column) ---
             per_drug_nonvalid_lines = [f"{nm}: {rsn}" for nm, rsn in displayed_drugs_assessment if rsn]
@@ -964,8 +961,7 @@ with tab1:
                 'Case Age (days)': case_age_days,
                 'Reporter Qualification': reporter_qualification,
                 'Patient Detail': patient_detail,
-                'Product Detail': " 
- ".join(product_details_list),
+                'Product Detail': "  ".join(product_details_list),
                 'Event Details': event_details_combined_display,
                 'Narrative': narrative_full,
                 'Validity': validity_value,  # per-drug comments are embedded here
