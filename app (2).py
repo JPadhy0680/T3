@@ -1,5 +1,3 @@
-
-# app.py
 import streamlit as st
 import pandas as pd
 import xml.etree.ElementTree as ET
@@ -10,20 +8,8 @@ import calendar
 from typing import Optional, Set, Tuple, List, Dict
 
 st.set_page_config(page_title="E2B_R3 XML Triage Application", layout="wide")
-# Ensure multi-line cells render properly
 st.markdown(""" """, unsafe_allow_html=True)
 st.title("📊🧠 E2B_R3 XML Triage Application 🛠️ 🚀")
-
-# ---------------------------------------------------------------------------------------------------------
-# v1.10.1 - per-product event-wise listedness display, no password
-# - Event Details column shows ONLY clinical details (no “Listedness:” fragments).
-# - Listedness column:
-#    * If exactly one Celix suspect product: show per-event lines (e.g., "Event 1: Listed").
-#    * If 2+ Celix suspects: show one line per product as:
-#        "<Drug> - Event 1: Listed; Event 2: Unlisted; ..."
-# - Listedness is blank for Non-Valid cases.
-# - Case-level Listedness column removed. App Assessment removed. Read-only table.
-# ---------------------------------------------------------------------------------------------------------
 
 with st.expander("📖 Instructions"):
     st.markdown("""
@@ -197,16 +183,15 @@ def get_mah_name_for_drug(drug_elem, ns) -> str:
 
 company_products = [
     "abiraterone", "apixaban", "apremilast", "bexarotene", "clobazam", "clonazepam",
-    "cyanocobalamin", "dabigatran", "dapagliflozin", "dimethyl fumarate", "famotidine",
+    "cyanocobalamin", "dabigatran", "dapagliflozin", "dimethyl fumarate", "empagliflozin", "famotidine",
     "fesoterodine", "icatibant", "itraconazole", "linagliptin", "linagliptin + metformin",
-    "nintedanib", "pirfenidone", "raltegravir", "ranolazine", "rivaroxaban", "saxagliptin",
+    "nintedanib", "pirfenidone", "raltegravir", "ranolazine", "rivaroxaban", "safinamide","saxagliptin",
     "sitagliptin", "tamsulosin + solifenacin", "tapentadol", "ticagrelor", "tamsulosin",
-    "solifenacin", "cyclogest", "progesterone", "luteum", "amelgen"
+    "solifenacin", "metformin"
 ]
 category2_products = {
     "clobazam", "clonazepam", "cyanocobalamin", "famotidine", "itraconazole",
-    "tamsulosin", "solifenacin", "tapentadol", "cyclogest", "progesterone",
-    "luteum", "amelgen"
+    "tamsulosin", "solifenacin", "tapentadol"
 }
 def parse_dd_mmm_yy(s):
     return datetime.strptime(s, "%d-%b-%y").date()
@@ -222,6 +207,7 @@ LAUNCH_INFO = {
     "dabigatran": ("yet", None),
     "dapagliflozin": ("launched_by_strength", {10.0: parse_dd_mmm_yy("26-Aug-25"), 5.0: parse_dd_mmm_yy("10-Sep-25")}),
     "dimethyl fumarate": ("launched", parse_dd_mmm_yy("05-Feb-24")),
+    "empagliflozin": ("awaited", None),
     "famotidine": ("launched", parse_dd_mmm_yy("21-Feb-25")),
     "fesoterodine": ("yet", None),
     "icatibant": ("launched", parse_dd_mmm_yy("28-Jul-22")),
@@ -238,6 +224,7 @@ LAUNCH_INFO = {
         15.0: parse_dd_mmm_yy("23-May-24"),
         20.0: parse_dd_mmm_yy("23-May-24")
     }),
+    "safinamide": ("awaited", None),
     "saxagliptin": ("yet", None),
     "sitagliptin": ("yet", None),
     "tamsulosin + solifenacin": ("launched", parse_dd_mmm_yy("08-May-23")),
